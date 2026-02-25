@@ -396,6 +396,24 @@
             color: red;
         }
 
+        /* --- MEASURE TOOL CSS --- */
+        .measure-mode {
+            cursor: crosshair !important;
+        }
+
+        .btn.active-tool {
+            background: var(--accent-red);
+            color: white;
+            border-color: white;
+        }
+
+        #measure-line {
+            stroke: var(--accent-red);
+            stroke-width: 3px;
+            stroke-dasharray: 6;
+            filter: drop-shadow(0 0 3px black);
+        }
+
         /* --- CARDS (LOCATIONS) --- */
         .card-grid {
             display: grid;
@@ -1205,6 +1223,11 @@
                         oninput="updateMapZoom(this.value)">
                     <i class="ph ph-plus"></i>
                 </div>
+
+                <button class="btn" id="btn-measure" onclick="toggleMeasureMode()" title="Measure Travel (Days)">
+                    <i class="ph ph-ruler"></i> Measure
+                </button>
+
                 <button class="btn btn-gold" onclick="openAddPinModal()">
                     <i class="ph ph-map-pin-plus"></i> Add Place
                 </button>
@@ -1234,80 +1257,87 @@
             <div id="pins-layer">
                 <img id="world-map" src="" alt="Game Map">
                 <svg id="grid-overlay" xmlns="http://www.w3.org/2000/svg"></svg>
-            </div>
-        </div>
 
-        <div id="locations-section" class="section" style="display: none;">
-            <div
-                style="display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid var(--accent-red); padding-bottom: 10px; margin-bottom: 20px;">
-                <h1 class="page-title" style="border: none; margin: 0; padding: 0;">Recorded Locations</h1>
-                <button class="btn btn-gold" onclick="createNewFolder()">
-                    <i class="ph ph-folder-plus"></i> New Folder
-                </button>
+                <svg id="measure-overlay"
+                    style="position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none; z-index: 150;">
+                    <line id="measure-line" x1="0" y1="0" x2="0" y2="0" style="display:none;" />
+                </svg>
+                <div id="measure-tooltip"
+                    style="position:absolute; display:none; background:rgba(0,0,0,0.8); color:var(--accent-gold); padding:4px 8px; border:1px solid var(--accent-red); border-radius:4px; font-weight:bold; pointer-events:none; z-index: 200; font-family:var(--font-header); font-size: 0.9rem; text-shadow: 1px 1px 0 #000; white-space: nowrap;">
+                </div>
             </div>
 
-            <div id="locations-grid"></div>
-        </div>
-
-        <div id="settings-section" class="section" style="display: none;">
-            <h1 class="page-title">Settings</h1>
-            <div class="setup-box" style="text-align: left; margin: 0 auto;">
-                <h3>Data Management</h3>
-                <p>Save your progress locally (autosave is on), download a backup, or clear everything.</p>
-
-                <h3>Map Grid Settings</h3>
-                <p style="font-size: 0.9rem; color: #888; margin-top: -10px;">
-                    Adjusting columns automatically calculates rows to keep the grid perfect (no stretching).
-                </p>
-
-                <div style="display: flex; gap: 10px; margin-bottom: 15px; align-items: flex-end;">
-                    <div style="flex: 1;">
-                        <label class="form-label">Columns (Scale)</label>
-                        <input type="number" id="grid-cols" class="form-input" value="20" min="1"
-                            onchange="updateGrid()">
-                    </div>
-                    <div style="flex: 1;">
-                        <label class="form-label">Rows (Auto)</label>
-                        <input type="text" id="grid-rows-display" class="form-input" value="Auto" disabled
-                            style="background: rgba(0,0,0,0.1); border-color: #444; color: #888;">
-                    </div>
+            <div id="locations-section" class="section" style="display: none;">
+                <div
+                    style="display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid var(--accent-red); padding-bottom: 10px; margin-bottom: 20px;">
+                    <h1 class="page-title" style="border: none; margin: 0; padding: 0;">Recorded Locations</h1>
+                    <button class="btn btn-gold" onclick="createNewFolder()">
+                        <i class="ph ph-folder-plus"></i> New Folder
+                    </button>
                 </div>
 
-                <div style="display: flex; justify-content: space-between; margin-bottom: 20px;">
-                    <label style="cursor: pointer; display: flex; align-items: center; gap: 8px;">
-                        <input type="radio" name="grid-type" value="hex" onchange="updateGrid()"> Hexagon
-                    </label>
-                    <label style="cursor: pointer; display: flex; align-items: center; gap: 8px;">
-                        <input type="radio" name="grid-type" value="square" onchange="updateGrid()"> Square
-                    </label>
-                    <label style="cursor: pointer; display: flex; align-items: center; gap: 8px;">
-                        <input type="radio" name="grid-type" value="none" checked onchange="updateGrid()"> None
-                    </label>
-                </div>
-
-                <hr style="border: 0; border-top: 1px solid #444; margin: 20px 0;">
-
-                <h3>Data Management</h3>
-
-                <button class="btn" onclick="document.getElementById('setup-section').style.display='flex'"
-                    style="width: 100%; margin-bottom: 10px;">
-                    <i class="ph ph-image"></i> Change Map Image
-                </button>
-
-                <button class="btn btn-gold" onclick="exportData()" style="width: 100%; margin-bottom: 10px;">
-                    <i class="ph ph-download"></i> Export Full Data (Backup)
-                </button>
-
-                <button class="btn" onclick="exportPlayerData()"
-                    style="width: 100%; margin-bottom: 10px; border-color: var(--accent-gold); color: var(--accent-gold);">
-                    <i class="ph ph-users"></i> Export for Players (No Quests)
-                </button>
-
-                <button class="btn btn-danger" onclick="resetData()" style="width: 100%;">
-                    <i class="ph ph-trash"></i> Reset All Data
-                </button>
+                <div id="locations-grid"></div>
             </div>
-        </div>
+
+            <div id="settings-section" class="section" style="display: none;">
+                <h1 class="page-title">Settings</h1>
+                <div class="setup-box" style="text-align: left; margin: 0 auto;">
+                    <h3>Data Management</h3>
+                    <p>Save your progress locally (autosave is on), download a backup, or clear everything.</p>
+
+                    <h3>Map Grid Settings</h3>
+                    <p style="font-size: 0.9rem; color: #888; margin-top: -10px;">
+                        Adjusting columns automatically calculates rows to keep the grid perfect (no stretching).
+                    </p>
+
+                    <div style="display: flex; gap: 10px; margin-bottom: 15px; align-items: flex-end;">
+                        <div style="flex: 1;">
+                            <label class="form-label">Columns (Scale)</label>
+                            <input type="number" id="grid-cols" class="form-input" value="20" min="1"
+                                onchange="updateGrid()">
+                        </div>
+                        <div style="flex: 1;">
+                            <label class="form-label">Rows (Auto)</label>
+                            <input type="text" id="grid-rows-display" class="form-input" value="Auto" disabled
+                                style="background: rgba(0,0,0,0.1); border-color: #444; color: #888;">
+                        </div>
+                    </div>
+
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 20px;">
+                        <label style="cursor: pointer; display: flex; align-items: center; gap: 8px;">
+                            <input type="radio" name="grid-type" value="hex" onchange="updateGrid()"> Hexagon
+                        </label>
+                        <label style="cursor: pointer; display: flex; align-items: center; gap: 8px;">
+                            <input type="radio" name="grid-type" value="square" onchange="updateGrid()"> Square
+                        </label>
+                        <label style="cursor: pointer; display: flex; align-items: center; gap: 8px;">
+                            <input type="radio" name="grid-type" value="none" checked onchange="updateGrid()"> None
+                        </label>
+                    </div>
+
+                    <hr style="border: 0; border-top: 1px solid #444; margin: 20px 0;">
+
+                    <h3>Data Management</h3>
+
+                    <button class="btn" onclick="document.getElementById('setup-section').style.display='flex'"
+                        style="width: 100%; margin-bottom: 10px;">
+                        <i class="ph ph-image"></i> Change Map Image
+                    </button>
+
+                    <button class="btn btn-gold" onclick="exportData()" style="width: 100%; margin-bottom: 10px;">
+                        <i class="ph ph-download"></i> Export Full Data (Backup)
+                    </button>
+
+                    <button class="btn" onclick="exportPlayerData()"
+                        style="width: 100%; margin-bottom: 10px; border-color: var(--accent-gold); color: var(--accent-gold);">
+                        <i class="ph ph-users"></i> Export for Players (No Quests)
+                    </button>
+
+                    <button class="btn btn-danger" onclick="resetData()" style="width: 100%;">
+                        <i class="ph ph-trash"></i> Reset All Data
+                    </button>
+                </div>
+            </div>
 
     </main>
 
@@ -1477,6 +1507,41 @@
 
         let tempPinData = {};
         let isPlacingPin = false;
+        
+        // --- MEASURE TOOL VARIABLES & FUNCTIONS ---
+        let isMeasureMode = false;
+        let isDraggingMeasure = false;
+        let measureStartX = 0;
+        let measureStartY = 0;
+        let hasMovedDuringMeasure = false;
+
+        function toggleMeasureMode() {
+            isMeasureMode = !isMeasureMode;
+            const btn = document.getElementById('btn-measure');
+            const container = document.getElementById('map-container');
+            
+            if (isMeasureMode) {
+                btn.classList.add('active-tool');
+                container.classList.add('measure-mode');
+                
+                if (typeof isPlacingPin !== 'undefined' && isPlacingPin) {
+                    isPlacingPin = false;
+                    container.classList.remove('crosshair-mode');
+                }
+                showToast("Measure Tool: Drag to measure distance");
+            } else {
+                btn.classList.remove('active-tool');
+                container.classList.remove('measure-mode');
+                clearMeasure();
+            }
+        }
+
+        function clearMeasure() {
+            const line = document.getElementById('measure-line');
+            const tooltip = document.getElementById('measure-tooltip');
+            if(line) line.style.display = 'none';
+            if(tooltip) tooltip.style.display = 'none';
+        }
 
         // Filter Configuration State
         let filterConfig = {
@@ -1764,7 +1829,7 @@
 
             // Get values from the form inputs
             const size = document.querySelector('input[name="new-pin-size"]:checked').value;
-            const showLabel = document.getElementById('new-pin-visible').checked; // <--- DEFINED HERE FIRST
+            const showLabel = document.getElementById('new-pin-visible').checked;
 
             // Save choices for next time
             appState.lastPinSize = size;
@@ -1780,36 +1845,114 @@
             };
 
             closeModals();
+            
+            // Disable measure mode if it's currently active
+            if (isMeasureMode) {
+                toggleMeasureMode();
+            }
+            
             isPlacingPin = true;
             document.getElementById('map-container').classList.add('crosshair-mode');
             showToast("Click map to place " + name);
         }
 
         // Update Map Click Listener to save the size property
-        const pinsLayer = document.getElementById('pins-layer'); // This line was missing
+        const pinsLayer = document.getElementById('pins-layer');
 
         if (pinsLayer) {
             pinsLayer.addEventListener('click', function (e) {
-                if (!isPlacingPin) return;
-                const rect = this.getBoundingClientRect();
-                const x = ((e.clientX - rect.left) / rect.width) * 100;
-                const y = ((e.clientY - rect.top) / rect.height) * 100;
+                if (isPlacingPin) {
+                    const rect = this.getBoundingClientRect();
+                    const x = ((e.clientX - rect.left) / rect.width) * 100;
+                    const y = ((e.clientY - rect.top) / rect.height) * 100;
 
-                const newPin = {
-                    id: Date.now(),
-                    x: x, y: y,
-                    name: tempPinData.name,
-                    description: "",
-                    showLabel: tempPinData.showLabel,
-                    isCapital: tempPinData.isCapital,
-                    size: tempPinData.size || 'big' // Default to big
-                };
+                    const newPin = {
+                        id: Date.now(),
+                        x: x, y: y,
+                        name: tempPinData.name,
+                        description: "",
+                        showLabel: tempPinData.showLabel,
+                        isCapital: tempPinData.isCapital,
+                        size: tempPinData.size || 'big' 
+                    };
 
-                appState.pins.push(newPin);
-                saveState();
-                renderPins();
-                isPlacingPin = false;
-                document.getElementById('map-container').classList.remove('crosshair-mode');
+                    appState.pins.push(newPin);
+                    saveState();
+                    renderPins();
+                    isPlacingPin = false;
+                    document.getElementById('map-container').classList.remove('crosshair-mode');
+                } else if (!isMeasureMode && !isDraggingMeasure) {
+                    // Clicking anywhere while not measuring or placing a pin will clear the line
+                    clearMeasure();
+                }
+            });
+
+            // Measure Tool: Start Dragging (Mousedown)
+            pinsLayer.addEventListener('mousedown', function(e) {
+                if (isMeasureMode) {
+                    isDraggingMeasure = true;
+                    hasMovedDuringMeasure = false;
+                    const rect = this.getBoundingClientRect();
+                    measureStartX = e.clientX - rect.left;
+                    measureStartY = e.clientY - rect.top;
+                    
+                    const line = document.getElementById('measure-line');
+                    const tooltip = document.getElementById('measure-tooltip');
+                    
+                    line.setAttribute('x1', measureStartX);
+                    line.setAttribute('y1', measureStartY);
+                    line.setAttribute('x2', measureStartX);
+                    line.setAttribute('y2', measureStartY);
+                    line.style.display = 'block';
+                    
+                    tooltip.style.display = 'block';
+                    tooltip.style.left = (measureStartX + 15) + 'px';
+                    tooltip.style.top = (measureStartY + 15) + 'px';
+                    tooltip.innerText = "0 Days";
+                    
+                    e.preventDefault(); 
+                }
+            });
+
+            // Measure Tool: Dragging (Mousemove)
+            window.addEventListener('mousemove', function(e) {
+                if (isMeasureMode && isDraggingMeasure) {
+                    hasMovedDuringMeasure = true;
+                    const rect = pinsLayer.getBoundingClientRect();
+                    let currentX = e.clientX - rect.left;
+                    let currentY = e.clientY - rect.top;
+                    
+                    currentX = Math.max(0, Math.min(currentX, rect.width));
+                    currentY = Math.max(0, Math.min(currentY, rect.height));
+
+                    const line = document.getElementById('measure-line');
+                    const tooltip = document.getElementById('measure-tooltip');
+                    
+                    line.setAttribute('x2', currentX);
+                    line.setAttribute('y2', currentY);
+                    
+                    const dx = currentX - measureStartX;
+                    const dy = currentY - measureStartY;
+                    const pixelDistance = Math.sqrt(dx * dx + dy * dy);
+                    
+                    const cols = appState.grid.cols || 20;
+                    const hexWidth = rect.width / cols; 
+                    const days = Math.round(pixelDistance / hexWidth);
+                    
+                    tooltip.style.left = (currentX + 15) + 'px';
+                    tooltip.style.top = (currentY + 15) + 'px';
+                    tooltip.innerText = days + (days === 1 ? " Day" : " Days");
+                }
+            });
+
+            // Measure Tool: Finish Dragging (Mouseup)
+            window.addEventListener('mouseup', function() {
+                if (isDraggingMeasure) {
+                    isDraggingMeasure = false;
+                    if (!hasMovedDuringMeasure) {
+                        clearMeasure();
+                    }
+                }
             });
         }
 
