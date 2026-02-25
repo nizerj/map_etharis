@@ -195,6 +195,22 @@
             transition: transform 0.2s;
         }
 
+        /* --- PROPORTIONAL PIN ZOOM --- */
+        #pins-layer {
+            --zoom: 1; /* Default scale factor */
+        }
+        
+        .map-pin-wrapper {
+            /* Scales the wrapper, and everything inside it, proportionally */
+            transform: scale(var(--zoom));
+            
+            /* Scale from the exact top-left anchor point (the location coordinate) */
+            transform-origin: 0 0;
+            
+            /* Matches the map layer's transition so they grow/shrink together smoothly */
+            transition: transform 0.2s ease; 
+        }
+
         /* Size Variants */
         .pin-big {
             width: 16px;
@@ -1216,17 +1232,32 @@
 
         <div id="map-section" class="section" style="padding: 0; display: none;">
 
-            <div class="map-toolbar">
-                <div style="display: flex; align-items: center; gap: 8px; color: var(--text-muted); font-size: 0.8rem;">
+           <div class="map-toolbar">
+                <button class="btn" onclick="adjustZoom(-10)" title="Zoom Out (-10%)" style="padding: 8px;">
                     <i class="ph ph-minus"></i>
-                    <input type="range" id="zoom-slider" min="20" max="100" value="90"
-                        oninput="updateMapZoom(this.value)">
-                    <i class="ph ph-plus"></i>
-                </div>
-
-                <button class="btn" id="btn-measure" onclick="toggleMeasureMode()" title="Measure Travel (Days)">
-                    <i class="ph ph-ruler"></i> Measure
                 </button>
+                
+                <input type="range" id="zoom-slider" min="20" max="300" value="100" style="width: 100px; margin: 0 5px;" oninput="updateMapZoom(this.value)">
+                
+                <button class="btn" onclick="adjustZoom(10)" title="Zoom In (+10%)" style="padding: 8px;">
+                    <i class="ph ph-plus"></i>
+                </button>
+                
+                <div style="width: 1px; height: 30px; background: #333; margin: 0 5px;"></div>
+                
+                <button class="btn" onclick="fitMapToScreen()" title="Fit Image to Page">
+                    <i class="ph ph-corners-in" style="font-size: 1.2rem;"></i>
+                </button>
+
+                <button class="btn" onclick="fitMapToWidth()" title="Fit Width to Page">
+                    <i class="ph ph-arrows-out-line-horizontal" style="font-size: 1.2rem;"></i>
+                </button>
+                
+                <button class="btn" id="btn-measure" onclick="toggleMeasureMode()" title="Measure Travel">
+                    <i class="ph ph-ruler" style="font-size: 1.2rem;"></i>
+                </button>
+
+                <div style="width: 1px; height: 30px; background: #333; margin: 0 5px;"></div>
 
                 <button class="btn btn-gold" onclick="openAddPinModal()">
                     <i class="ph ph-map-pin-plus"></i> Add Place
@@ -1257,6 +1288,10 @@
             <div id="pins-layer">
                 <img id="world-map" src="" alt="Game Map">
                 <svg id="grid-overlay" xmlns="http://www.w3.org/2000/svg"></svg>
+
+                <svg id="measure-hex-overlay" 
+                    style="position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none; z-index: 145;">
+                </svg>
 
                 <svg id="measure-overlay"
                     style="position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none; z-index: 150;">
@@ -1507,18 +1542,21 @@
 
         let tempPinData = {};
         let isPlacingPin = false;
-        
+
         // --- MEASURE TOOL VARIABLES & FUNCTIONS ---
         let isMeasureMode = false;
         let isDraggingMeasure = false;
+        let isDraggingHexMeasure = false;
         let measureStartX = 0;
         let measureStartY = 0;
         let hasMovedDuringMeasure = false;
+        let measurePathCells = []; // Tracks which hexes have been selected
+        let lastProcessedHexId = null; // Prevents rapid toggling while dragging
 
         function toggleMeasureMode() {
             isMeasureMode = !isMeasureMode;
             const btn = document.getElementById('btn-measure');
-            const container = document.getElementById('map-container');
+            const container = document.getElementById('map-section');
             
             if (isMeasureMode) {
                 btn.classList.add('active-tool');
@@ -1528,7 +1566,7 @@
                     isPlacingPin = false;
                     container.classList.remove('crosshair-mode');
                 }
-                showToast("Measure Tool: Drag to measure distance");
+                showToast("Measure Tool: L-Click for Line, Middle-Click for Hexes");
             } else {
                 btn.classList.remove('active-tool');
                 container.classList.remove('measure-mode');
@@ -1539,8 +1577,118 @@
         function clearMeasure() {
             const line = document.getElementById('measure-line');
             const tooltip = document.getElementById('measure-tooltip');
+            const hexOverlay = document.getElementById('measure-hex-overlay');
+            
             if(line) line.style.display = 'none';
             if(tooltip) tooltip.style.display = 'none';
+            if(hexOverlay) hexOverlay.innerHTML = '';
+            
+            measurePathCells = [];
+            lastProcessedHexId = null;
+        }
+
+        function addCellToMeasure(e) {
+            const rect = document.getElementById('pins-layer').getBoundingClientRect();
+            const mapImg = document.getElementById('world-map');
+            const hexOverlay = document.getElementById('measure-hex-overlay');
+            if (!mapImg || !mapImg.naturalWidth || !hexOverlay) return;
+
+            // Sync the overlay's coordinate system perfectly with the map's native pixels
+            if (!hexOverlay.getAttribute('viewBox')) {
+                hexOverlay.setAttribute('viewBox', `0 0 ${mapImg.naturalWidth} ${mapImg.naturalHeight}`);
+            }
+
+            // Calculate map scaling coordinates
+            const scaleX = mapImg.naturalWidth / rect.width;
+            const scaleY = mapImg.naturalHeight / rect.height;
+            const mapX = (e.clientX - rect.left) * scaleX;
+            const mapY = (e.clientY - rect.top) * scaleY;
+
+            const w = mapImg.naturalWidth;
+            const cols = appState.grid.cols || 20;
+            const type = appState.grid.type || 'none';
+            let targetCell = null;
+
+            if (type === 'square') {
+                const size = w / cols;
+                const c = Math.floor(mapX / size);
+                const r = Math.floor(mapY / size);
+                targetCell = {
+                    id: `sq-${r}-${c}`,
+                    pathStr: `M${c*size},${r*size} h${size} v${size} h-${size} Z`
+                };
+            } else {
+                // Defaults to Hex logic (even if grid is hidden) for optimal travel pathing
+                const hexW = w / cols;
+                const radius = hexW / Math.sqrt(3);
+                const hexH = 2 * radius;
+                const vertDist = hexH * 0.75;
+                
+                const estR = Math.floor(mapY / vertDist);
+                const estC = Math.floor(mapX / hexW);
+                
+                let minD = Infinity;
+                let bestHex = null;
+                
+                // Check neighboring hex centers to find the exact one we are hovering over
+                for (let r = estR - 2; r <= estR + 2; r++) {
+                    for (let c = estC - 2; c <= estC + 2; c++) {
+                        const xOffset = (Math.abs(r) % 2 === 1) ? (hexW / 2) : 0;
+                        const cx = (c * hexW) + xOffset - (hexW / 4);
+                        const cy = (r * vertDist) + radius;
+                        
+                        const d = Math.pow(mapX - cx, 2) + Math.pow(mapY - cy, 2);
+                        if (d < minD) {
+                            minD = d;
+                            bestHex = {
+                                id: `hex-${r}-${c}`,
+                                pathStr: `M${cx},${cy - radius} L${cx + (hexW / 2)},${cy - (radius / 2)} L${cx + (hexW / 2)},${cy + (radius / 2)} L${cx},${cy + radius} L${cx - (hexW / 2)},${cy + (radius / 2)} L${cx - (hexW / 2)},${cy - (radius / 2)} Z`
+                            };
+                        }
+                    }
+                }
+                targetCell = bestHex;
+            }
+
+            // --- THE TOGGLE LOGIC ---
+            // Only process if it's a valid cell AND it's not the exact same hex we just processed while dragging
+            if (targetCell && targetCell.id !== lastProcessedHexId) {
+                lastProcessedHexId = targetCell.id; 
+                
+                const cellIndex = measurePathCells.indexOf(targetCell.id);
+
+                if (cellIndex > -1) {
+                    // It already exists -> REMOVE IT
+                    measurePathCells.splice(cellIndex, 1);
+                    const existingPath = document.getElementById(`path-${targetCell.id}`);
+                    if (existingPath) {
+                        existingPath.remove();
+                    }
+                } else {
+                    // It doesn't exist -> ADD IT
+                    measurePathCells.push(targetCell.id);
+                    
+                    const pathEl = document.createElementNS("http://www.w3.org/2000/svg", "path");
+                    pathEl.setAttribute("id", `path-${targetCell.id}`); // ID used for removal
+                    pathEl.setAttribute("d", targetCell.pathStr);
+                    pathEl.setAttribute("fill", "rgba(139, 0, 0, 0.4)");
+                    pathEl.setAttribute("stroke", "var(--accent-red)");
+                    pathEl.setAttribute("stroke-width", Math.max(3, w / cols / 10)); 
+                    
+                    hexOverlay.appendChild(pathEl);
+                }
+            }
+
+            // Update Tooltip position and text
+            const currentX = e.clientX - rect.left;
+            const currentY = e.clientY - rect.top;
+            const tooltip = document.getElementById('measure-tooltip');
+            tooltip.style.display = 'block';
+            tooltip.style.left = (currentX + 15) + 'px';
+            tooltip.style.top = (currentY + 15) + 'px';
+            
+            const days = measurePathCells.length;
+            tooltip.innerText = days + (days === 1 ? " Day" : " Days");
         }
 
         // Filter Configuration State
@@ -1746,7 +1894,12 @@
 
             renderPins();
 
-            // --- LOAD GRID SETTINGS TO INPUTS ---
+            // Set initial pin size scaling based on the current slider value
+            const slider = document.getElementById('zoom-slider');
+            if (slider) {
+                updateMapZoom(slider.value);
+            }
+
             // --- LOAD GRID SETTINGS ---
             if (appState.grid) {
                 document.getElementById('grid-cols').value = appState.grid.cols || 20;
@@ -1794,12 +1947,74 @@
             }
         }
 
+        // --- ZOOM CONTROLS ---
+        function getFitToScreenZoom() {
+            // Using map-section as the wrapper to calculate screen size
+            const container = document.getElementById('map-section');
+            const mapImg = document.getElementById('world-map');
+            if (!container || !mapImg || !mapImg.naturalWidth) return 20; 
+            
+            const cWidth = container.clientWidth;
+            const cHeight = container.clientHeight;
+            const iWidth = mapImg.naturalWidth;
+            const iHeight = mapImg.naturalHeight;
+            
+            // Calculate what percentage of width makes the height fit perfectly
+            let targetPct = (cHeight * iWidth * 100) / (cWidth * iHeight);
+            
+            // Ensure it doesn't overflow horizontally past 100%
+            targetPct = Math.min(100, targetPct);
+            
+            return Math.floor(targetPct);
+        }
+
+        function adjustZoom(delta) {
+            const slider = document.getElementById('zoom-slider');
+            if (!slider) return;
+            
+            // Set the dynamic minimum so users can't zoom out past the screen bounds
+            const minZoom = getFitToScreenZoom();
+            slider.min = minZoom;
+            
+            let newVal = parseInt(slider.value) + delta;
+            newVal = Math.max(minZoom, Math.min(parseInt(slider.max), newVal));
+            
+            slider.value = newVal;
+            updateMapZoom(newVal);
+        }
+
+        function fitMapToWidth() {
+            const slider = document.getElementById('zoom-slider');
+            if (slider) {
+                slider.min = getFitToScreenZoom(); // Update the floor limit
+                slider.value = 100;
+            }
+            updateMapZoom(100);
+        }
+
+        function fitMapToScreen() {
+            const minZoom = getFitToScreenZoom();
+            const slider = document.getElementById('zoom-slider');
+            if (slider) {
+                slider.min = minZoom; // Set the absolute minimum allowed zoom
+                slider.value = minZoom; // Default back to minimum zoom
+            }
+            updateMapZoom(minZoom);
+        }
+
         // --- MAP LOGIC ---
         function updateMapZoom(val) {
             const layer = document.getElementById('pins-layer');
-            if (layer) layer.style.width = val + '%';
+            if (layer) {
+                layer.style.width = val + '%';
+                
+                // Calculate scale factor (100% = 1.0x scale, 300% = 3.0x scale)
+                const zoomScale = val / 100;
+                
+                // Apply this factor to the CSS variable so pins scale perfectly with the map
+                layer.style.setProperty('--zoom', zoomScale);
+            }
         }
-
         // Update Open Add Modal to reset size
         function openAddPinModal() {
             document.getElementById('new-pin-name').value = '';
@@ -1852,7 +2067,7 @@
             }
             
             isPlacingPin = true;
-            document.getElementById('map-container').classList.add('crosshair-mode');
+            document.getElementById('map-section').classList.add('crosshair-mode'); // Fixed ID
             showToast("Click map to place " + name);
         }
 
@@ -1880,78 +2095,100 @@
                     saveState();
                     renderPins();
                     isPlacingPin = false;
-                    document.getElementById('map-container').classList.remove('crosshair-mode');
-                } else if (!isMeasureMode && !isDraggingMeasure) {
-                    // Clicking anywhere while not measuring or placing a pin will clear the line
+                    document.getElementById('map-section').classList.remove('crosshair-mode');
+                } else if (!isMeasureMode && !isDraggingMeasure && !isDraggingHexMeasure) {
                     clearMeasure();
                 }
             });
 
-            // Measure Tool: Start Dragging (Mousedown)
+            // Start Dragging/Clicking
             pinsLayer.addEventListener('mousedown', function(e) {
                 if (isMeasureMode) {
-                    isDraggingMeasure = true;
-                    hasMovedDuringMeasure = false;
-                    const rect = this.getBoundingClientRect();
-                    measureStartX = e.clientX - rect.left;
-                    measureStartY = e.clientY - rect.top;
-                    
-                    const line = document.getElementById('measure-line');
-                    const tooltip = document.getElementById('measure-tooltip');
-                    
-                    line.setAttribute('x1', measureStartX);
-                    line.setAttribute('y1', measureStartY);
-                    line.setAttribute('x2', measureStartX);
-                    line.setAttribute('y2', measureStartY);
-                    line.style.display = 'block';
-                    
-                    tooltip.style.display = 'block';
-                    tooltip.style.left = (measureStartX + 15) + 'px';
-                    tooltip.style.top = (measureStartY + 15) + 'px';
-                    tooltip.innerText = "0 Days";
-                    
                     e.preventDefault(); 
-                }
-            });
-
-            // Measure Tool: Dragging (Mousemove)
-            window.addEventListener('mousemove', function(e) {
-                if (isMeasureMode && isDraggingMeasure) {
-                    hasMovedDuringMeasure = true;
-                    const rect = pinsLayer.getBoundingClientRect();
-                    let currentX = e.clientX - rect.left;
-                    let currentY = e.clientY - rect.top;
                     
-                    currentX = Math.max(0, Math.min(currentX, rect.width));
-                    currentY = Math.max(0, Math.min(currentY, rect.height));
-
-                    const line = document.getElementById('measure-line');
-                    const tooltip = document.getElementById('measure-tooltip');
-                    
-                    line.setAttribute('x2', currentX);
-                    line.setAttribute('y2', currentY);
-                    
-                    const dx = currentX - measureStartX;
-                    const dy = currentY - measureStartY;
-                    const pixelDistance = Math.sqrt(dx * dx + dy * dy);
-                    
-                    const cols = appState.grid.cols || 20;
-                    const hexWidth = rect.width / cols; 
-                    const days = Math.round(pixelDistance / hexWidth);
-                    
-                    tooltip.style.left = (currentX + 15) + 'px';
-                    tooltip.style.top = (currentY + 15) + 'px';
-                    tooltip.innerText = days + (days === 1 ? " Day" : " Days");
-                }
-            });
-
-            // Measure Tool: Finish Dragging (Mouseup)
-            window.addEventListener('mouseup', function() {
-                if (isDraggingMeasure) {
-                    isDraggingMeasure = false;
-                    if (!hasMovedDuringMeasure) {
-                        clearMeasure();
+                    if (e.button === 0) { // LEFT CLICK: Start Line
+                        isDraggingMeasure = true;
+                        hasMovedDuringMeasure = false;
+                        clearMeasure(); // Clear existing hexes
+                        
+                        const rect = this.getBoundingClientRect();
+                        measureStartX = e.clientX - rect.left;
+                        measureStartY = e.clientY - rect.top;
+                        
+                        const line = document.getElementById('measure-line');
+                        const tooltip = document.getElementById('measure-tooltip');
+                        
+                        line.setAttribute('x1', measureStartX);
+                        line.setAttribute('y1', measureStartY);
+                        line.setAttribute('x2', measureStartX);
+                        line.setAttribute('y2', measureStartY);
+                        line.style.display = 'block';
+                        
+                        tooltip.style.display = 'block';
+                        tooltip.style.left = (measureStartX + 15) + 'px';
+                        tooltip.style.top = (measureStartY + 15) + 'px';
+                        tooltip.innerText = "0 Days";
+                        
+                    } else if (e.button === 1) { // MIDDLE CLICK: Start Hex Paint
+                        isDraggingHexMeasure = true;
+                        hasMovedDuringMeasure = false;
+                        lastProcessedHexId = null; // Reset the memory lock
+                        
+                        const line = document.getElementById('measure-line');
+                        if (line) line.style.display = 'none'; // Hide line if active
+                        
+                        addCellToMeasure(e);
                     }
+                }
+            });
+
+            // Dragging (Mousemove)
+            window.addEventListener('mousemove', function(e) {
+                if (isMeasureMode) {
+                    if (isDraggingMeasure) {
+                        hasMovedDuringMeasure = true;
+                        const rect = pinsLayer.getBoundingClientRect();
+                        let currentX = e.clientX - rect.left;
+                        let currentY = e.clientY - rect.top;
+                        
+                        currentX = Math.max(0, Math.min(currentX, rect.width));
+                        currentY = Math.max(0, Math.min(currentY, rect.height));
+
+                        const line = document.getElementById('measure-line');
+                        const tooltip = document.getElementById('measure-tooltip');
+                        
+                        line.setAttribute('x2', currentX);
+                        line.setAttribute('y2', currentY);
+                        
+                        const dx = currentX - measureStartX;
+                        const dy = currentY - measureStartY;
+                        const pixelDistance = Math.sqrt(dx * dx + dy * dy);
+                        
+                        const cols = appState.grid.cols || 20;
+                        const hexWidth = rect.width / cols; 
+                        const days = Math.round(pixelDistance / hexWidth);
+                        
+                        tooltip.style.left = (currentX + 15) + 'px';
+                        tooltip.style.top = (currentY + 15) + 'px';
+                        tooltip.innerText = days + (days === 1 ? " Day" : " Days");
+                    } else if (isDraggingHexMeasure) {
+                        hasMovedDuringMeasure = true;
+                        addCellToMeasure(e);
+                    }
+                }
+            });
+
+            // Finish Dragging (Mouseup)
+            window.addEventListener('mouseup', function(e) {
+                if (isDraggingMeasure && e.button === 0) {
+                    isDraggingMeasure = false;
+                    // If they left-clicked without moving, clear everything
+                    if (!hasMovedDuringMeasure) clearMeasure(); 
+                }
+                
+                if (isDraggingHexMeasure && e.button === 1) {
+                    isDraggingHexMeasure = false;
+                    lastProcessedHexId = null; // Reset memory lock so we can click the exact same hex again
                 }
             });
         }
@@ -2627,6 +2864,60 @@
                     location.reload();
                 }
             }
+        }
+
+        // --- MIDDLE-CLICK PANNING LOGIC ---
+        let isMapPanning = false;
+        let panStartX = 0;
+        let panStartY = 0;
+        let scrollStartLeft = 0;
+        let scrollStartTop = 0;
+
+        // In your HTML structure, map-section is the area that handles the overflow/scrolling
+        const mapScrollContainer = document.getElementById('map-section');
+
+        if (mapScrollContainer) {
+            // Start panning when middle mouse button is pressed
+            mapScrollContainer.addEventListener('mousedown', function(e) {
+                if (e.button === 1) {
+                    if (isMeasureMode) return;
+                    e.preventDefault(); // Stops the browser's default multi-directional scroll icon
+                    isMapPanning = true;
+                    
+                    // Record where the mouse was clicked
+                    panStartX = e.clientX;
+                    panStartY = e.clientY;
+                    
+                    // Record where the scrollbars currently are
+                    scrollStartLeft = mapScrollContainer.scrollLeft;
+                    scrollStartTop = mapScrollContainer.scrollTop;
+                    
+                    // Change cursor to indicate grabbing
+                    mapScrollContainer.style.cursor = 'grabbing';
+                }
+            });
+
+            // Handle the dragging motion
+            window.addEventListener('mousemove', function(e) {
+                if (!isMapPanning) return;
+                e.preventDefault();
+                
+                // Calculate how far the mouse has moved since the click
+                const dx = e.clientX - panStartX;
+                const dy = e.clientY - panStartY;
+                
+                // Subtracting the difference moves the map naturally with your hand
+                mapScrollContainer.scrollLeft = scrollStartLeft - dx;
+                mapScrollContainer.scrollTop = scrollStartTop - dy;
+            });
+
+            // Stop panning when the middle button is released
+            window.addEventListener('mouseup', function(e) {
+                if (e.button === 1 && isMapPanning) {
+                    isMapPanning = false;
+                    mapScrollContainer.style.cursor = ''; // Reverts to the default cursor
+                }
+            });
         }
 
     </script>
